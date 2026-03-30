@@ -27,6 +27,36 @@ The app combines:
 
 **[Try the live demo on HuggingFace Spaces](https://huggingface.co/spaces/mondalsou/lead_optimization_agent)**
 
+## Agentic workflow architecture
+
+This project demonstrates an **AI-native scientific workflow** — a pattern increasingly central to computational pharmaceutical development. Rather than producing a single model output, the system implements a human-in-the-loop iterative loop where AI reasoning, deterministic scientific tools, and scientist judgment work together:
+
+```
+Scientist defines goal (brief)
+         │
+         ▼
+  Agent proposes structural edit  ←──────────────────┐
+         │                                            │
+         ▼                                            │
+  RDKit scores candidate locally                      │
+  (QED, BBB, ADMET, solubility, SA)                  │
+         │                                            │
+         ▼                                            │
+  Candidate tracked in journey log                   │
+         │                                            │
+         ▼                                            │
+  Scientist reviews: accept / redirect / stop ────────┘
+         │
+         ▼
+  Best candidate surfaced with full audit trail
+```
+
+This architecture maps directly to how AI-assisted workflows are being embedded in drug product development: the model proposes, the deterministic tools validate, and the human expert retains oversight and final judgment. The agent does not make unilateral decisions — it accelerates the scientist's reasoning cycle.
+
+**Why this matters for CMC/formulation contexts**: The same loop structure — propose formulation change → score against CQAs → refine with expert input → log decision rationale — applies directly to AI-supported formulation development and process optimization. The pattern here is domain-agnostic; the chemistry scoring layer is the swappable component.
+
+---
+
 ## What this project does
 
 Given a starting molecule and a target optimization brief, the agent:
@@ -172,9 +202,10 @@ matplotlib>=3.8.0
 
 ## What this repo is good for
 
-- portfolio/demo project for AI + chemistry tooling
-- medicinal chemistry workflow prototyping
-- showing iterative agent behavior instead of one-shot prompting
+- demonstrating AI-native scientific workflows with human-in-the-loop oversight
+- showing iterative agent behavior and decision tracking instead of one-shot prompting
+- medicinal chemistry and formulation workflow prototyping
+- illustrating how LLM reasoning and deterministic scientific tools can be composed
 - experimenting with optimization briefs and visual candidate review
 
 ## Limitations
@@ -186,10 +217,11 @@ matplotlib>=3.8.0
 ## Why this is interesting
 
 This project sits at the intersection of:
-- agentic workflows
-- chemistry-aware UI design
-- human-in-the-loop lead optimization
-- LLM reasoning paired with deterministic local analysis
+- agentic workflows for scientific decision support
+- chemistry-aware UI design for expert stakeholders
+- human-in-the-loop optimization with full audit trail
+- LLM reasoning paired with deterministic, reproducible local analysis
+- decision-support tooling that keeps scientific oversight central — not a black box
 
 ## Author
 
