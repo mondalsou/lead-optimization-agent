@@ -18,13 +18,13 @@ The app combines:
 - local RDKit-based property analysis for fast scoring
 - a Streamlit UI for reviewing each attempt, change rationale, and property trajectory
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-HuggingFace%20Spaces-FFD21E?style=flat&logo=huggingface&logoColor=black)](https://huggingface.co/spaces/mondalsou/lead-optimization-agent)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-HuggingFace%20Spaces-FFD21E?style=flat&logo=huggingface&logoColor=black)](https://huggingface.co/spaces/mondalsou/lead_optimization_agent)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat&logo=python&logoColor=white)](https://python.org)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.35+-FF4B4B?style=flat&logo=streamlit&logoColor=white)](https://streamlit.io)
 [![Anthropic](https://img.shields.io/badge/Anthropic-Claude-191919?style=flat)](https://anthropic.com)
 [![RDKit](https://img.shields.io/badge/RDKit-local%20analysis-0f766e?style=flat)](https://www.rdkit.org/)
 
-**[Try the live demo on HuggingFace Spaces](https://huggingface.co/spaces/mondalsou/lead-optimization-agent)**
+**[Try the live demo on HuggingFace Spaces](https://huggingface.co/spaces/mondalsou/lead_optimization_agent)**
 
 ## What this project does
 
@@ -83,7 +83,7 @@ This means the chemistry scoring path is local and fast. The Anthropic API is us
 ## Project structure
 
 ```text
-lead-optimization-agent/
+lead_optimization_agent/
 ├── app.py
 ├── agent_utils.py
 ├── requirements.txt
@@ -100,8 +100,8 @@ lead-optimization-agent/
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/mondalsou/lead-optimization-agent.git
-cd lead-optimization-agent
+git clone https://github.com/mondalsou/lead_optimization_agent.git
+cd lead_optimization_agent
 pip install -r requirements.txt
 ```
 
