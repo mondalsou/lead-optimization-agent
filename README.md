@@ -1,8 +1,8 @@
 ---
 title: Lead Optimization Agent
 emoji: 🧬
-colorFrom: teal
-colorTo: green
+colorFrom: green
+colorTo: blue
 sdk: streamlit
 sdk_version: 1.35.0
 app_file: app.py
