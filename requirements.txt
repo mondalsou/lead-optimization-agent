@@ -1,5 +1,5 @@
 # Lead Optimization Agent — Dependencies
-streamlit>=1.40.0
+streamlit
 # ----------------------------------------
 # Core
 anthropic>=0.40.0
