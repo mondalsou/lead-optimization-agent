@@ -4,7 +4,7 @@ streamlit>=1.35.0
 # Core
 anthropic>=0.40.0
 
-# Chemistry (try pip first; if it fails use: conda install -c conda-forge rdkit)
+# Chemistry
 rdkit>=2023.9.5
 
 # Data & Visualization
@@ -12,7 +12,3 @@ pandas>=2.0.0
 plotly>=5.18.0
 matplotlib>=3.8.0
 kaleido>=0.2.1          # plotly static image export
-
-# Notebook
-jupyter>=1.0.0
-ipywidgets>=8.0.0

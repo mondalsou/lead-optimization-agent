@@ -1644,13 +1644,16 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     st.divider()
-
-    api_key = st.text_input(
-        "Anthropic API Key",
+    entered_api_key = st.text_input(
+        "Claude API Key",
         type="password",
-        value=os.environ.get("ANTHROPIC_API_KEY", ""),
-        help="Get yours free at console.anthropic.com",
+        value="",
+        placeholder="sk-ant-...",
+        help="Used only for live optimisation. If you do not have a key, you can still load or upload saved runs below.",
     )
+    server_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    api_key = entered_api_key.strip() or server_api_key
+    st.caption("If you do not want to use a key, you can still explore saved runs below.")
 
     st.divider()
     preset_name = st.selectbox("Example scenario", list(PRESETS.keys()))
@@ -1684,13 +1687,20 @@ with st.sidebar:
 
     st.divider()
     st.markdown("#### Saved Runs")
-    latest_exists = LATEST_RUN_PATH.exists()
-    if st.button("Load latest saved run", use_container_width=True, disabled=not latest_exists):
+    saved_run_files = sorted(RUNS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    saved_run_options = [path.name for path in saved_run_files]
+    selected_saved_run = st.selectbox(
+        "Choose a saved run",
+        saved_run_options if saved_run_options else ["No saved runs found"],
+        disabled=not saved_run_options,
+    )
+    if st.button("Open selected saved run", use_container_width=True, disabled=not saved_run_files):
         try:
-            apply_loaded_run(json.loads(LATEST_RUN_PATH.read_text(encoding="utf-8")), "latest saved run")
+            chosen_path = RUNS_DIR / selected_saved_run
+            apply_loaded_run(json.loads(chosen_path.read_text(encoding="utf-8")), selected_saved_run)
             st.rerun()
         except Exception as exc:
-            st.error(f"Could not load latest run: {exc}")
+            st.error(f"Could not open saved run: {exc}")
 
     uploaded_run = st.file_uploader(
         "Upload a saved run",
@@ -1797,7 +1807,7 @@ with overview_col:
     st.markdown(
         f"""
 <div class="overview-card">
-  <div class="overview-label">Current brief</div>
+  <div class="overview-label">Example Prompt for Target Profile</div>
   <div class="overview-title">{escape_html(active_brief_title)}</div>
   {brief_body_html(active_goal)}
   <div class="brief-meta">Starting SMILES</div>
@@ -1811,10 +1821,10 @@ with readiness_col:
     readiness_html = "".join(
         [
             readiness_item(
-                "API access",
-                "Key is loaded."
+                "Claude key",
+                "A live optimisation key is available."
                 if api_key
-                else "Add your Anthropic key.",
+                else "Enter a Claude key or use a saved run.",
                 bool(api_key),
             ),
             readiness_item(
@@ -1886,7 +1896,7 @@ render_tab_views(results_placeholder, journey_placeholder, candidates)
 # ─── Run ───────────────────────────────────────────────────────────────────────
 if run_btn:
     if not api_key:
-        st.error("Please enter your Anthropic API key in the sidebar.")
+        st.error("Enter a Claude API key to run live optimisation, or use a saved run instead.")
     elif not smiles_input.strip():
         st.error("Please enter a starting molecule SMILES.")
     elif not goal_input.strip():

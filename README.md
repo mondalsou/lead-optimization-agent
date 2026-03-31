@@ -1,3 +1,14 @@
+---
+title: Lead Optimization Agent
+emoji: 🧬
+colorFrom: teal
+colorTo: green
+sdk: streamlit
+sdk_version: 1.35.0
+app_file: app.py
+pinned: false
+---
+
 # Lead Optimization Agent
 
 An AI-assisted medicinal chemistry sandbox for exploring lead-optimization ideas in a visual, iterative workflow.
@@ -7,10 +18,13 @@ The app combines:
 - local RDKit-based property analysis for fast scoring
 - a Streamlit UI for reviewing each attempt, change rationale, and property trajectory
 
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-HuggingFace%20Spaces-FFD21E?style=flat&logo=huggingface&logoColor=black)](https://huggingface.co/spaces/mondalsou/lead-optimization-agent)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat&logo=python&logoColor=white)](https://python.org)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.35+-FF4B4B?style=flat&logo=streamlit&logoColor=white)](https://streamlit.io)
 [![Anthropic](https://img.shields.io/badge/Anthropic-Claude-191919?style=flat)](https://anthropic.com)
 [![RDKit](https://img.shields.io/badge/RDKit-local%20analysis-0f766e?style=flat)](https://www.rdkit.org/)
+
+**[Try the live demo on HuggingFace Spaces](https://huggingface.co/spaces/mondalsou/lead-optimization-agent)**
 
 ## What this project does
 
