@@ -7,6 +7,7 @@ sdk: streamlit
 sdk_version: 1.35.0
 app_file: app.py
 pinned: false
+short_description: AI agent for iterative drug lead optimization — proposes structural changes, scores ADMET properties locally with RDKit, and tracks BBB, CNS MPO, and QED across rounds.
 ---
 
 # Lead Optimization Agent
