@@ -11,7 +11,8 @@ if command -v python3 &>/dev/null; then PYTHON=python3; else PYTHON=python; fi
 
 # Handle PEP 668 (externally managed system Python)
 PIP_FLAGS=""
-if $PIP install --dry-run pip 2>&1 | grep -q "externally-managed"; then
+_pip_test=$($PIP install --dry-run pip 2>&1 || true)
+if echo "$_pip_test" | grep -q "externally-managed"; then
     PIP_FLAGS="--break-system-packages"
     echo "  Note: system Python is externally managed, using --break-system-packages"
 fi
