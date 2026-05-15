@@ -5,21 +5,39 @@
 
 set -euo pipefail
 
-# Resolve pip and python commands
-if command -v pip3 &>/dev/null; then PIP=pip3; elif command -v pip &>/dev/null; then PIP=pip; else PIP="python3 -m pip"; fi
-if command -v python3 &>/dev/null; then PYTHON=python3; else PYTHON=python; fi
-
-# Handle PEP 668 (externally managed system Python)
-PIP_FLAGS=""
-_pip_test=$($PIP install --dry-run pip 2>&1 || true)
-if echo "$_pip_test" | grep -q "externally-managed"; then
-    PIP_FLAGS="--break-system-packages"
-    echo "  Note: system Python is externally managed, using --break-system-packages"
-fi
-
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Auto-detect Hermes installation
+_HERMES_BASE=""
+for _candidate in /usr/local/lib/hermes-agent "$HOME/.hermes" /opt/hermes-agent; do
+    if [ -f "$_candidate/tools/registry.py" ]; then
+        _HERMES_BASE="$_candidate"
+        break
+    fi
+done
+
+HERMES_TOOLS_DIR="${HERMES_TOOLS_DIR:-${_HERMES_BASE:+$_HERMES_BASE/tools}}"
+HERMES_SKILLS_DIR="${HERMES_SKILLS_DIR:-${_HERMES_BASE:+$_HERMES_BASE/skills}}"
 HERMES_TOOLS_DIR="${HERMES_TOOLS_DIR:-$HOME/.hermes/tools}"
 HERMES_SKILLS_DIR="${HERMES_SKILLS_DIR:-$HOME/.hermes/skills}"
+
+# Prefer Hermes venv Python/pip if present
+if [ -n "$_HERMES_BASE" ] && [ -f "$_HERMES_BASE/venv/bin/pip" ]; then
+    PIP="$_HERMES_BASE/venv/bin/pip"
+    PYTHON="$_HERMES_BASE/venv/bin/python"
+    PIP_FLAGS=""
+    echo "  Using Hermes venv: $_HERMES_BASE/venv"
+else
+    # Fall back to system pip with PEP 668 handling
+    if command -v pip3 &>/dev/null; then PIP=pip3; elif command -v pip &>/dev/null; then PIP=pip; else PIP="python3 -m pip"; fi
+    if command -v python3 &>/dev/null; then PYTHON=python3; else PYTHON=python; fi
+    PIP_FLAGS=""
+    _pip_test=$($PIP install --dry-run pip 2>&1 || true)
+    if echo "$_pip_test" | grep -q "externally-managed"; then
+        PIP_FLAGS="--break-system-packages"
+        echo "  Note: system Python is externally managed, using --break-system-packages"
+    fi
+fi
 
 echo "=== Lead Optimization Agent — Hermes Setup ==="
 echo "Repo:         $REPO_DIR"
