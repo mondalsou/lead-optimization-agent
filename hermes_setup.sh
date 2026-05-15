@@ -9,6 +9,13 @@ set -euo pipefail
 if command -v pip3 &>/dev/null; then PIP=pip3; elif command -v pip &>/dev/null; then PIP=pip; else PIP="python3 -m pip"; fi
 if command -v python3 &>/dev/null; then PYTHON=python3; else PYTHON=python; fi
 
+# Handle PEP 668 (externally managed system Python)
+PIP_FLAGS=""
+if $PIP install --dry-run pip 2>&1 | grep -q "externally-managed"; then
+    PIP_FLAGS="--break-system-packages"
+    echo "  Note: system Python is externally managed, using --break-system-packages"
+fi
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HERMES_TOOLS_DIR="${HERMES_TOOLS_DIR:-$HOME/.hermes/tools}"
 HERMES_SKILLS_DIR="${HERMES_SKILLS_DIR:-$HOME/.hermes/skills}"
@@ -21,14 +28,14 @@ echo
 
 # ── 1. Install Python dependencies ─────────────────────────────────────────
 echo "[1/4] Installing Python dependencies..."
-$PIP install --quiet streamlit anthropic pandas plotly matplotlib 2>&1 | tail -1
+$PIP install --quiet $PIP_FLAGS streamlit anthropic pandas plotly matplotlib 2>&1 | tail -1
 
 # ── 2. Install RDKit ────────────────────────────────────────────────────────
 echo "[2/4] Installing RDKit..."
 if $PYTHON -c "import rdkit" 2>/dev/null; then
     echo "  RDKit already installed."
 else
-    if $PIP install --quiet rdkit 2>/dev/null; then
+    if $PIP install --quiet $PIP_FLAGS rdkit 2>/dev/null; then
         $PYTHON -c "import rdkit" && echo "  RDKit installed via pip." || {
             echo "  pip install succeeded but import failed — trying conda..."
             if command -v conda &>/dev/null; then
