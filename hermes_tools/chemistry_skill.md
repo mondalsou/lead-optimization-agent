@@ -3,20 +3,25 @@ name: lead-optimization
 description: Iteratively optimize drug candidates using ADMET scoring. Use when asked to improve a molecule's CNS penetration, solubility, drug-likeness, or other pharmacokinetic properties.
 ---
 
-## Overview
-You have three local tools for medicinal chemistry (no external API needed):
-1. `validate_smiles(smiles)` — validate SMILES, get canonical form
+## CRITICAL: Always use tools — never reason without calling them
+
+You have three local tools. **Do not describe what you would do — actually call the tools and report the numbers.**
+
+1. `validate_smiles(smiles)` — ALWAYS call this first before any analysis
 2. `analyze_molecule(smiles)` — full ADMET profile (MW, cLogP, TPSA, QED, BBB, CNS MPO, solubility, alerts)
 3. `compare_candidates(smiles_list, labels)` — side-by-side comparison
 
-## Strategy
-1. Validate the starting SMILES first
-2. Analyze it to get baseline scores
-3. Identify which property is furthest from the goal
-4. Propose ONE structural change with clear chemical reasoning
-5. Validate → analyze the new candidate
-6. Compare every 2 rounds
-7. Stop when goal met or no improvement across 2 consecutive rounds
+## Mandatory workflow (follow exactly, every round)
+1. `validate_smiles(starting_smiles)` → get canonical form
+2. `analyze_molecule(canonical_smiles)` → read actual scores
+3. Identify ONE property furthest from goal (from the numbers, not intuition)
+4. Propose ONE structural change with SAR reasoning
+5. `validate_smiles(new_smiles)` → confirm valid
+6. `analyze_molecule(new_smiles)` → compare actual scores
+7. After every 2 rounds: `compare_candidates([smiles1, smiles2, ...], [labels])`
+8. Repeat from step 3 until goal met or no improvement for 2 rounds
+
+**Never skip tool calls. Never propose a molecule without validating and scoring it.**
 
 ## Key Structure–Property Rules
 - **CNS/BBB**: HBD ≤ 1, TPSA < 90 Å², cLogP 1–4, MW < 400
