@@ -5,6 +5,10 @@
 
 set -euo pipefail
 
+# Resolve pip and python commands
+if command -v pip3 &>/dev/null; then PIP=pip3; elif command -v pip &>/dev/null; then PIP=pip; else PIP="python3 -m pip"; fi
+if command -v python3 &>/dev/null; then PYTHON=python3; else PYTHON=python; fi
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HERMES_TOOLS_DIR="${HERMES_TOOLS_DIR:-$HOME/.hermes/tools}"
 HERMES_SKILLS_DIR="${HERMES_SKILLS_DIR:-$HOME/.hermes/skills}"
@@ -17,15 +21,15 @@ echo
 
 # ── 1. Install Python dependencies ─────────────────────────────────────────
 echo "[1/4] Installing Python dependencies..."
-pip install --quiet streamlit anthropic pandas plotly matplotlib 2>&1 | tail -1
+$PIP install --quiet streamlit anthropic pandas plotly matplotlib 2>&1 | tail -1
 
 # ── 2. Install RDKit ────────────────────────────────────────────────────────
 echo "[2/4] Installing RDKit..."
-if python -c "import rdkit" 2>/dev/null; then
+if $PYTHON -c "import rdkit" 2>/dev/null; then
     echo "  RDKit already installed."
 else
-    if pip install --quiet rdkit 2>/dev/null; then
-        python -c "import rdkit" && echo "  RDKit installed via pip." || {
+    if $PIP install --quiet rdkit 2>/dev/null; then
+        $PYTHON -c "import rdkit" && echo "  RDKit installed via pip." || {
             echo "  pip install succeeded but import failed — trying conda..."
             if command -v conda &>/dev/null; then
                 conda install -y -c conda-forge rdkit -q
@@ -40,7 +44,7 @@ else
         if command -v conda &>/dev/null; then
             conda install -y -c conda-forge rdkit -q
         else
-            echo "  ERROR: Cannot install RDKit (no conda, pip failed)."
+            echo "  ERROR: Cannot install RDKit (no conda, $PIP failed)."
             echo "  Fix: conda install -c conda-forge rdkit"
             exit 1
         fi
