@@ -96,6 +96,8 @@ The Streamlit app presents each iteration as a candidate card with:
 - `Candidate Journey` tab for attempt-by-attempt review
 - `Performance Overview` tab with trajectory plots and a start-vs-best radar chart
 
+Each completed run is saved automatically to `saved_runs/YYYY-MM-DD/run_HHMMSS.json` and can be reloaded from the sidebar without calling the API again. `latest_run.json` is always kept at the root of `saved_runs/` and auto-loaded on startup.
+
 ---
 
 ## Quick Start
@@ -120,8 +122,10 @@ lead_optimization_agent/
 ├── app.py              # Streamlit UI + agent orchestration
 ├── agent_utils.py      # RDKit scoring, SMILES validation, helpers
 ├── requirements.txt
-├── candidates.json
-├── saved_runs/         # Local run persistence (JSON)
+├── saved_runs/         # Run persistence — one subfolder per day
+│   ├── latest_run.json          # Always the most recent run (auto-loaded on startup)
+│   └── YYYY-MM-DD/
+│       └── run_HHMMSS.json      # Timestamped run snapshot
 └── notebooks/
     ├── 01_admet_tool.ipynb
     ├── 02_agent_loop.ipynb
