@@ -8,6 +8,9 @@ import os
 import re
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 import streamlit as st
@@ -586,6 +589,56 @@ html, body, [class*="css"] {
     overflow-wrap: anywhere;
 }
 
+.image-comparison-shell {
+    margin-top: 1rem;
+    padding: 1.2rem;
+    border-radius: 26px;
+    background: var(--panel);
+    border: 1px solid rgba(25, 33, 42, 0.08);
+    box-shadow: var(--shadow);
+}
+
+.image-comparison-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--ink);
+    margin-bottom: 0.3rem;
+}
+
+.image-comparison-copy {
+    color: var(--muted);
+    margin: 0 0 1rem;
+    font-size: 0.9rem;
+}
+
+.image-comparison-label {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 0.35rem 0.72rem;
+    margin-bottom: 0.65rem;
+    background: rgba(15, 118, 110, 0.10);
+    color: var(--teal);
+    font-size: 0.76rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.image-placeholder {
+    min-height: 300px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px dashed rgba(25, 33, 42, 0.18);
+    color: var(--muted);
+    text-align: center;
+    line-height: 1.45;
+}
+
 .result-pill-row {
     display: flex;
     flex-wrap: wrap;
@@ -855,6 +908,83 @@ def mol_scores_html(c, start=None):
 def escape_html(text):
     return html.escape(str(text or "")).replace("\n", "<br>")
 
+def candidate_smiles(candidate):
+    return (candidate or {}).get("canonical_smiles") or (candidate or {}).get("input_smiles", "")
+
+def baseline_candidate_from_state(candidates):
+    for idx, candidate in enumerate(candidates):
+        if candidate_mol_index(candidate, idx) == 0:
+            return candidate
+    return candidates[0] if candidates else {}
+
+def pubchem_png_for_smiles(smiles):
+    smiles = str(smiles or "").strip()
+    if not smiles:
+        return None, "No SMILES available for this candidate."
+
+    cache = st.session_state.setdefault("pubchem_image_cache", {})
+    if smiles in cache:
+        cached = cache[smiles]
+        return cached.get("data"), cached.get("error")
+
+    encoded_smiles = urllib.parse.quote(smiles, safe="")
+    url = (
+        "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/"
+        f"{encoded_smiles}/PNG?image_size=500x500"
+    )
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "LeadOptimizationAgent/1.0 (Streamlit UI; PubChem structure image lookup)",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=12) as response:
+            image_bytes = response.read()
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as exc:
+        error = f"PubChem image unavailable: {exc}"
+        cache[smiles] = {"data": None, "error": error}
+        return None, error
+
+    if not image_bytes or not image_bytes.startswith(b"\x89PNG"):
+        error = "PubChem did not return a PNG image for this SMILES."
+        cache[smiles] = {"data": None, "error": error}
+        return None, error
+
+    cache[smiles] = {"data": image_bytes, "error": None}
+    return image_bytes, None
+
+def render_pubchem_image(candidate, label):
+    smiles = candidate_smiles(candidate)
+    image_bytes, error = pubchem_png_for_smiles(smiles)
+    st.markdown(f'<div class="image-comparison-label">{escape_html(label)}</div>', unsafe_allow_html=True)
+    if image_bytes:
+        st.image(image_bytes, use_container_width=True)
+    else:
+        st.markdown(
+            f'<div class="image-placeholder">{escape_html(error or "No image available.")}</div>',
+            unsafe_allow_html=True,
+        )
+    st.caption(smiles or "No SMILES available")
+
+def render_image_comparison(baseline, winner, winner_index=None):
+    resolved_winner_index = st.session_state.get("winner_index") if winner_index is None else winner_index
+    st.markdown(
+        """
+<div class="image-comparison-shell">
+  <div class="image-comparison-title">Baseline vs winner structure</div>
+  <p class="image-comparison-copy">Images are fetched from PubChem from the SMILES in the loaded run.</p>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+    baseline_col, winner_col = st.columns(2, gap="large")
+    with baseline_col:
+        render_pubchem_image(baseline, "Baseline")
+    with winner_col:
+        render_pubchem_image(winner, f"Winner (Attempt {resolved_winner_index})")
+
 def truncate_text(text, limit=220):
     clean = " ".join(str(text or "").split())
     if len(clean) <= limit:
@@ -1064,7 +1194,36 @@ def normalize_candidates(raw_candidates):
         raise ValueError("No valid candidates found in saved run.")
     return normalized
 
-def build_run_payload(smiles, goal, candidates, preset_name, source="live"):
+def fallback_winner_index(candidates):
+    if not candidates:
+        return 0
+    return max(candidate_mol_index(candidate, idx) for idx, candidate in enumerate(candidates))
+
+def candidate_mol_index(candidate, fallback):
+    try:
+        return int(candidate.get("mol_index", fallback))
+    except (TypeError, ValueError):
+        return fallback
+
+def normalize_winner_index(raw_winner_index, candidates):
+    fallback = fallback_winner_index(candidates)
+    try:
+        winner_index = int(raw_winner_index)
+    except (TypeError, ValueError):
+        return fallback
+
+    candidate_indices = {candidate_mol_index(c, idx) for idx, c in enumerate(candidates)}
+    return winner_index if winner_index in candidate_indices else fallback
+
+def winning_candidate_from_state(candidates):
+    winner_index = normalize_winner_index(st.session_state.get("winner_index"), candidates)
+    for idx, candidate in enumerate(candidates):
+        if candidate_mol_index(candidate, idx) == winner_index:
+            return winner_index, candidate
+    return fallback_winner_index(candidates), candidates[-1]
+
+def build_run_payload(smiles, goal, candidates, preset_name, source="live", winner_index=None):
+    resolved_winner_index = normalize_winner_index(winner_index, candidates)
     return {
         "version": 1,
         "saved_at": datetime.now().isoformat(timespec="seconds"),
@@ -1073,6 +1232,7 @@ def build_run_payload(smiles, goal, candidates, preset_name, source="live"):
         "starting_smiles": smiles,
         "goal": goal,
         "candidate_count": len(candidates),
+        "winner_index": resolved_winner_index,
         "candidates": candidates,
     }
 
@@ -1085,6 +1245,7 @@ def load_run_payload(payload):
             "goal": "",
             "saved_at": "",
             "source": "upload",
+            "winner_index": fallback_winner_index(candidates),
         }
         return candidates, meta
 
@@ -1098,6 +1259,7 @@ def load_run_payload(payload):
         "goal": payload.get("goal") or "",
         "saved_at": payload.get("saved_at") or "",
         "source": payload.get("source") or "upload",
+        "winner_index": normalize_winner_index(payload.get("winner_index"), candidates),
     }
     return candidates, meta
 
@@ -1107,12 +1269,14 @@ def apply_loaded_run(payload, source_label):
     st.session_state.candidates = candidates
     st.session_state.completed = True
     st.session_state.run_meta = meta
+    st.session_state.winner_index = meta["winner_index"]
     st.session_state.run_notice = f"Loaded {len(candidates)} candidates from {source_label}."
 
 def save_run_snapshot(payload, runs_dir, latest_path):
-    runs_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_path = runs_dir / f"run_{stamp}.json"
+    now = datetime.now()
+    date_dir = runs_dir / now.strftime("%Y-%m-%d")
+    date_dir.mkdir(parents=True, exist_ok=True)
+    run_path = date_dir / f"run_{now.strftime('%H%M%S')}.json"
     text = json.dumps(payload, indent=2)
     latest_path.write_text(text, encoding="utf-8")
     run_path.write_text(text, encoding="utf-8")
@@ -1314,9 +1478,26 @@ TOOLS = [
 ]
 
 # ─── Session state ─────────────────────────────────────────────────────────────
-for k, v in {"candidates": [], "completed": False, "run_meta": {}, "run_notice": "", "render_seq": 0}.items():
+for k, v in {"candidates": [], "completed": False, "run_meta": {}, "run_notice": "", "render_seq": 0, "winner_index": None, "show_image_comparison": False, "pubchem_image_cache": {}}.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+# Initialize file modification time tracker
+if 'latest_run_mtime' not in st.session_state:
+    st.session_state.latest_run_mtime = 0
+
+# Check for updates to latest_run.json and auto-load on every mtime change
+if LATEST_RUN_PATH.exists():
+    current_mtime = LATEST_RUN_PATH.stat().st_mtime
+    last_mtime = st.session_state.get('latest_run_mtime', 0)
+    if current_mtime > last_mtime:
+        try:
+            apply_loaded_run(json.loads(LATEST_RUN_PATH.read_text(encoding="utf-8")), "latest_run.json")
+            st.session_state.latest_run_mtime = current_mtime
+            if last_mtime > 0:
+                st.session_state.run_notice = "📂 Auto-loaded updated latest run."
+        except Exception as exc:
+            st.session_state.run_notice = f"Could not reload latest saved run: {exc}"
 
 
 # ─── Agent runner ──────────────────────────────────────────────────────────────
@@ -1392,6 +1573,7 @@ def run_agent(smiles, goal, max_tool_calls, api_key, status_placeholder,
 
     st.session_state.candidates = candidates
     st.session_state.completed  = True
+    st.session_state.winner_index = fallback_winner_index(candidates)
 
 
 def render_results_tab(candidates, render_token=0):
@@ -1401,13 +1583,19 @@ def render_results_tab(candidates, render_token=0):
 
     df = pd.DataFrame(candidates)
     start = df.iloc[0].to_dict()
-    best = df.loc[df["cns_mpo_score"].idxmax()].to_dict() if "cns_mpo_score" in df.columns else df.iloc[-1].to_dict()
+    winner_index, winner = winning_candidate_from_state(candidates)
 
     render_section_heading(
         "What improved from the starting scaffold",
-        "The key deltas first.",
+        "The winning candidate from the saved run metadata.",
         "Results",
     )
+
+    def number_value(row, key, default=0.0):
+        try:
+            return float(row.get(key, default) or default)
+        except (TypeError, ValueError):
+            return float(default)
 
     def metric_card(label, before, after, fmt, unit="", invert=False):
         delta = after - before
@@ -1424,36 +1612,35 @@ def render_results_tab(candidates, render_token=0):
 </div>"""
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.markdown(metric_card("Brain Penetration", start.get("bbb_probability", 0) * 100, best.get("bbb_probability", 0) * 100, ".0f", "%"), unsafe_allow_html=True)
-    c2.markdown(metric_card("CNS Activity Score", start.get("cns_mpo_score", 0), best.get("cns_mpo_score", 0), ".2f", "/5"), unsafe_allow_html=True)
-    c3.markdown(metric_card("Drug Likeness", start.get("qed_score", 0) * 100, best.get("qed_score", 0) * 100, ".0f", "%"), unsafe_allow_html=True)
-    c4.markdown(metric_card("Molecular Flexibility", start.get("rotatable_bonds", 0), best.get("rotatable_bonds", 0), "d", " bonds", invert=True), unsafe_allow_html=True)
+    c1.markdown(metric_card("Solubility logS", number_value(start, "log_s"), number_value(winner, "log_s"), ".2f"), unsafe_allow_html=True)
+    c2.markdown(metric_card("Drug Likeness QED", number_value(start, "qed_score") * 100, number_value(winner, "qed_score") * 100, ".0f", "%"), unsafe_allow_html=True)
+    c3.markdown(metric_card("Molecular Weight", number_value(start, "molecular_weight"), number_value(winner, "molecular_weight"), ".1f", " Da", invert=True), unsafe_allow_html=True)
+    c4.markdown(metric_card("Structural Alerts", number_value(start, "num_alerts"), number_value(winner, "num_alerts"), ".0f", "", invert=True), unsafe_allow_html=True)
 
     st.write("")
 
     render_section_heading(
         "Trajectory across optimisation rounds",
-        "See whether performance compounded or just shifted.",
+        "Follow the displayed candidate properties over the run.",
         "Progress",
     )
 
     rounds = list(range(len(df)))
     labels = ["Start"] + [f"Attempt {i}" for i in range(1, len(df))]
 
-    fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+    fig, axes = plt.subplots(1, 4, figsize=(16, 4))
     fig.patch.set_facecolor("#f7f0e8")
 
     chart_metrics = [
-        ("bbb_probability", "Brain Penetration (%)",  "#2563eb", 0.80, lambda v: v * 100),
-        ("cns_mpo_score",   "CNS Activity Score",     "#0f766e", 4.0,  lambda v: v),
-        ("qed_score",       "Drug Likeness (%)",      "#d97757", 0.75, lambda v: v * 100),
+        ("log_s",            "Solubility logS",        "#2563eb", lambda v: v),
+        ("qed_score",        "Drug Likeness QED (%)",  "#0f766e", lambda v: v * 100),
+        ("molecular_weight", "Molecular Weight (Da)",  "#d97757", lambda v: v),
+        ("num_alerts",       "Structural Alerts",      "#b7791f", lambda v: v),
     ]
-    for ax, (col, title, color, target, transform) in zip(axes, chart_metrics):
+    for ax, (col, title, color, transform) in zip(axes, chart_metrics):
         ax.set_facecolor("#fffdf9")
-        vals = [transform(v) for v in df[col].tolist()]
-        tgt  = transform(target)
+        vals = [transform(number_value(candidate, col)) for candidate in candidates]
         ax.plot(rounds, vals, "o-", color=color, linewidth=2.5, markersize=9, zorder=3)
-        ax.axhline(y=tgt, color="#b7791f", linestyle="--", alpha=0.8, label=f"Target ({transform(target):.0f}{'%' if '%' in title else ''})")
         ax.fill_between(rounds, vals, alpha=0.08, color=color)
         for r, v in zip(rounds, vals):
             ax.annotate(f"{v:.1f}", (r, v), textcoords="offset points", xytext=(0, 10), ha="center", fontsize=8.5, color=color, fontweight="bold")
@@ -1463,7 +1650,6 @@ def render_results_tab(candidates, render_token=0):
         ax.tick_params(colors="#5f6b76")
         ax.spines[["top", "right"]].set_visible(False)
         ax.spines[["left", "bottom"]].set_edgecolor("#d8cdc0")
-        ax.legend(fontsize=8, framealpha=0.8)
         ax.grid(True, alpha=0.18, color="#c7b8a8")
 
     plt.tight_layout(pad=2)
@@ -1471,41 +1657,33 @@ def render_results_tab(candidates, render_token=0):
     plt.close()
 
     render_section_heading(
-        "Overall profile, start versus best",
-        "A fast balance check.",
+        "Overall profile, start versus winner",
+        "A fast property balance check.",
         "Profile fit",
     )
 
     radar_props = [
-        ("qed_score",       "Drug Likeness",      0, 1,   True),
-        ("bbb_probability", "Brain Penetration",  0, 1,   True),
-        ("cns_mpo_score",   "CNS Activity",       0, 5,   True),
-        ("gi_absorption",   "Oral Absorption",    0, 1,   True),
-        ("log_s",           "Solubility",        -10, 2,  True),
-        ("num_alerts",      "Safety",             0, 5,   False),
+        ("log_s",            "Solubility",       -10, 2,   True),
+        ("qed_score",        "Drug Likeness",      0, 1,   True),
+        ("molecular_weight", "Low MW",           100, 600, False),
+        ("num_alerts",       "No Alerts",          0, 5,   False),
     ]
 
     def norm(row, col, lo, hi, pos):
-        v = row.get(col, 0)
-        if col == "gi_absorption":
-            v = {"High": 1.0, "Moderate": 0.6, "Low": 0.2}.get(str(v), 0.5)
-        try:
-            v = float(v or 0)
-        except Exception:
-            v = 0
+        v = number_value(row, col)
         n = max(0.0, min(1.0, (v - lo) / (hi - lo + 1e-9)))
         return n if pos else 1.0 - n
 
     lbls = [p[1] for p in radar_props]
     sv   = [norm(start, p[0], p[2], p[3], p[4]) for p in radar_props]
-    bv   = [norm(best,  p[0], p[2], p[3], p[4]) for p in radar_props]
+    wv   = [norm(winner,  p[0], p[2], p[3], p[4]) for p in radar_props]
     lbls += [lbls[0]]
     sv += [sv[0]]
-    bv += [bv[0]]
+    wv += [wv[0]]
 
     radar = go.Figure([
         go.Scatterpolar(r=sv, theta=lbls, fill="toself", name="Starting molecule", line=dict(color="#d97757", width=2), fillcolor="rgba(217,119,87,0.12)"),
-        go.Scatterpolar(r=bv, theta=lbls, fill="toself", name=f"Best candidate (attempt {best['mol_index']})", line=dict(color="#0f766e", width=2), fillcolor="rgba(15,118,110,0.14)"),
+        go.Scatterpolar(r=wv, theta=lbls, fill="toself", name=f"Winner (attempt {winner_index})", line=dict(color="#0f766e", width=2), fillcolor="rgba(15,118,110,0.14)"),
     ])
     radar.update_layout(
         polar=dict(
@@ -1524,24 +1702,32 @@ def render_results_tab(candidates, render_token=0):
         key=f"radar_chart_{render_token}",
     )
 
-    smi = best.get("canonical_smiles") or best.get("input_smiles", "")
+    smi = winner.get("canonical_smiles") or winner.get("input_smiles", "")
+    result_pills = f"""  <div class="result-pill-row">
+    <span class="result-pill">logS {number_value(winner, 'log_s'):.2f}</span>
+    <span class="result-pill">QED {number_value(winner, 'qed_score') * 100:.0f}%</span>
+    <span class="result-pill">MW {number_value(winner, 'molecular_weight'):.1f} Da</span>
+    <span class="result-pill">Alerts {number_value(winner, 'num_alerts'):.0f}</span>
+  </div>"""
     st.markdown(
         f"""
 <div class="best-banner">
-  <div class="best-banner-label">Best candidate</div>
-  <div class="best-banner-title">Attempt {best['mol_index']} is the clearest winner from this run.</div>
-  <p class="best-banner-copy">Best overall balance in this run.</p>
+  <div class="best-banner-label">Winning candidate</div>
+  <div class="best-banner-title">Attempt {winner_index} is the winner declared by this run.</div>
+  <p class="best-banner-copy">Displayed from the saved run metadata.</p>
   <div class="best-banner-code">{escape_html(smi)}</div>
-  <div class="result-pill-row">
-    <span class="result-pill">BBB {best.get('bbb_probability', 0) * 100:.0f}%</span>
-    <span class="result-pill">CNS MPO {best.get('cns_mpo_score', 0):.2f}/6</span>
-    <span class="result-pill">QED {best.get('qed_score', 0) * 100:.0f}%</span>
-    <span class="result-pill">Safety alerts {best.get('num_alerts', 0)}</span>
-  </div>
-</div>
-""",
+{result_pills}
+</div>""",
         unsafe_allow_html=True,
     )
+
+    toggle_label = "Hide Image Comparison" if st.session_state.get("show_image_comparison") else "Compare Images"
+    if st.button(toggle_label, key="toggle_image_comparison"):
+        st.session_state.show_image_comparison = not st.session_state.get("show_image_comparison", False)
+
+    if st.session_state.get("show_image_comparison"):
+        baseline = baseline_candidate_from_state(candidates)
+        render_image_comparison(baseline, winner, winner_index)
 
 
 def render_candidate_journey_tab(candidates):
@@ -1551,7 +1737,7 @@ def render_candidate_journey_tab(candidates):
 
     df = pd.DataFrame(candidates)
     start = df.iloc[0].to_dict()
-    best_idx = int(df["cns_mpo_score"].idxmax()) if "cns_mpo_score" in df.columns else len(df) - 1
+    winner_index = normalize_winner_index(st.session_state.get("winner_index"), candidates)
 
     render_section_heading(
         "Every molecule the agent evaluated",
@@ -1561,7 +1747,8 @@ def render_candidate_journey_tab(candidates):
     st.write("")
 
     for i, c in enumerate(candidates):
-        is_best = (i == best_idx)
+        candidate_index = candidate_mol_index(c, i)
+        is_best = (candidate_index == winner_index)
         is_start = (i == 0)
         card_cls = "best" if is_best else ("start" if is_start else "good")
         previous_candidate = candidates[i - 1] if i > 0 else None
@@ -1682,13 +1869,18 @@ with st.sidebar:
         st.session_state.candidates = []
         st.session_state.completed  = False
         st.session_state.run_meta = {}
+        st.session_state.winner_index = None
         st.session_state.run_notice = ""
         st.rerun()
 
     st.divider()
     st.markdown("#### Saved Runs")
-    saved_run_files = sorted(RUNS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    saved_run_options = [path.name for path in saved_run_files]
+    saved_run_files = sorted(
+        [p for p in RUNS_DIR.rglob("*.json") if p.name != "latest_run.json"],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    saved_run_options = [str(p.relative_to(RUNS_DIR)) for p in saved_run_files]
     selected_saved_run = st.selectbox(
         "Choose a saved run",
         saved_run_options if saved_run_options else ["No saved runs found"],
@@ -1723,6 +1915,7 @@ with st.sidebar:
             current_candidates,
             current_meta.get("preset_name", preset_name),
             source=current_meta.get("source", "live"),
+            winner_index=st.session_state.get("winner_index"),
         )
         st.download_button(
             "Download current run",
@@ -1733,7 +1926,7 @@ with st.sidebar:
         )
 
     st.divider()
-    st.caption("Claude agent loop with live scoring, plus local saved-run viewing")
+    st.caption("Claude agent loop with local saved-run viewing")
 
 current_meta = st.session_state.get("run_meta") or {}
 smiles_clean = smiles_input.strip()
@@ -1746,16 +1939,12 @@ smiles_validation = is_valid_smiles(active_smiles) if active_smiles else {"valid
 candidates = st.session_state.candidates
 
 if candidates:
-    candidate_df = pd.DataFrame(candidates)
-    best_candidate = (
-        candidate_df.loc[candidate_df["cns_mpo_score"].idxmax()].to_dict()
-        if "cns_mpo_score" in candidate_df.columns
-        else candidate_df.iloc[-1].to_dict()
-    )
+    winner_index, winner_candidate = winning_candidate_from_state(candidates)
     hero_stats = [
-        ("Candidates explored", str(len(candidates))),
-        ("Best CNS MPO", f"{best_candidate.get('cns_mpo_score', 0):.2f}/5"),
-        ("Best BBB", f"{best_candidate.get('bbb_probability', 0) * 100:.0f}%"),
+        ("Winning attempt", str(winner_index)),
+        ("Winner logS", f"{winner_candidate.get('log_s', 0):.2f}"),
+        ("Winner QED", f"{winner_candidate.get('qed_score', 0) * 100:.0f}%"),
+        ("Winner alerts", str(winner_candidate.get("num_alerts", 0))),
     ]
 else:
     hero_stats = [
@@ -1909,8 +2098,9 @@ if run_btn:
             st.session_state.candidates = []
             st.session_state.completed  = False
             st.session_state.run_meta = {}
+            st.session_state.winner_index = None
             render_tab_views(results_placeholder, journey_placeholder, [])
-            with st.spinner("Agent running… scoring locally, no warm-up needed"):
+            with st.spinner("Agent running... evaluating candidates"):
                 run_agent(
                     smiles_input.strip(),
                     goal_input.strip(),
@@ -1927,6 +2117,7 @@ if run_btn:
                     st.session_state.candidates,
                     preset_name,
                     source="live",
+                    winner_index=st.session_state.get("winner_index"),
                 )
                 try:
                     save_run_snapshot(saved_payload, RUNS_DIR, LATEST_RUN_PATH)
@@ -1940,5 +2131,7 @@ if run_btn:
                     "saved_at": saved_payload["saved_at"],
                     "source": "live",
                     "source_label": "latest live run",
+                    "winner_index": saved_payload["winner_index"],
                 }
+                st.session_state.winner_index = saved_payload["winner_index"]
             st.rerun()

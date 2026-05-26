@@ -25,3 +25,12 @@ Thumbs.db
 
 # MLflow
 mlruns/
+
+# Generated outputs
+saved_runs/
+candidates.json
+*.png
+*.html
+*.bak
+bbb_optimization_report.md
+extras/
