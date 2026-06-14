@@ -1,8 +1,13 @@
 # Lead Optimization Agent — Dependencies
 streamlit
 # ----------------------------------------
-# Core
+# Core (Anthropic direct — used by notebooks 01-03)
 anthropic>=0.40.0
+
+# LangChain + OpenRouter (notebook 04)
+langchain>=0.2.0
+langchain-openai>=0.1.0
+langchain-core>=0.2.0
 
 # Chemistry
 rdkit>=2023.9.5

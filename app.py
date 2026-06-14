@@ -15,10 +15,17 @@ import pandas as pd
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
-import anthropic
+from langchain_openai import ChatOpenAI
+from langchain_core.tools import tool
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.agents import create_tool_calling_agent, AgentExecutor
+from langchain_core.callbacks import BaseCallbackHandler
 
 sys.path.insert(0, os.path.dirname(__file__))
-from agent_utils import tool_executor, is_valid_smiles
+from agent_utils import (
+    call_admet_api, extract_key_scores, is_valid_smiles,
+    compare_candidates as _compare_candidates,
+)
 
 # ─── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -1288,30 +1295,36 @@ candidate toward the stated optimization goal, while keeping it drug-like and sa
   - End with the best candidate SMILES and a plain-language summary
 """.strip()
 
-TOOLS = [
-    {
-        "name": "validate_smiles",
-        "description": "Validate a SMILES string (local, instant). Always call before analyze_molecule.",
-        "input_schema": {"type":"object","properties":{"smiles":{"type":"string"}},"required":["smiles"]},
-    },
-    {
-        "name": "analyze_molecule",
-        "description": "Get full ADMET profile (local RDKit, instant).",
-        "input_schema": {"type":"object","properties":{"smiles":{"type":"string"}},"required":["smiles"]},
-    },
-    {
-        "name": "compare_candidates",
-        "description": "Compare multiple molecules side by side.",
-        "input_schema": {
-            "type":"object",
-            "properties":{
-                "smiles_list":{"type":"array","items":{"type":"string"}},
-                "labels":{"type":"array","items":{"type":"string"}},
-            },
-            "required":["smiles_list"],
-        },
-    },
-]
+MODELS = {
+    "Claude 3.5 Sonnet": "anthropic/claude-3.5-sonnet",
+    "Claude 3 Haiku (fast)": "anthropic/claude-3-haiku",
+    "GPT-4o": "openai/gpt-4o",
+    "Gemini 2.0 Flash": "google/gemini-2.0-flash-001",
+    "Llama 3.3 70B": "meta-llama/llama-3.3-70b-instruct",
+}
+
+
+@tool
+def validate_smiles(smiles: str) -> str:
+    """Validate a SMILES string and return its canonical form. Always call this before analyze_molecule."""
+    return json.dumps(is_valid_smiles(smiles))
+
+
+@tool
+def analyze_molecule(smiles: str) -> str:
+    """Compute a full ADMET profile for a molecule (local RDKit, no API). Returns MW, cLogP, TPSA, QED, BBB penetration, CNS MPO, solubility, Lipinski rules, PAINS alerts, and decision guidance."""
+    resp = call_admet_api(smiles)
+    result = extract_key_scores(resp) if "error" not in resp else resp
+    return json.dumps(result)
+
+
+@tool
+def compare_candidates(smiles_list: list, labels: list = None) -> str:
+    """Compare multiple drug candidates side by side. Returns ADMET scores for all molecules in one call."""
+    return json.dumps(_compare_candidates(smiles_list, labels))
+
+
+TOOLS = [validate_smiles, analyze_molecule, compare_candidates]
 
 # ─── Session state ─────────────────────────────────────────────────────────────
 for k, v in {"candidates": [], "completed": False, "run_meta": {}, "run_notice": "", "render_seq": 0}.items():
@@ -1320,76 +1333,89 @@ for k, v in {"candidates": [], "completed": False, "run_meta": {}, "run_notice":
 
 
 # ─── Agent runner ──────────────────────────────────────────────────────────────
-def run_agent(smiles, goal, max_tool_calls, api_key, status_placeholder,
+def run_agent(smiles, goal, max_tool_calls, api_key, model, status_placeholder,
               results_placeholder=None, journey_placeholder=None):
-    client = anthropic.Anthropic(api_key=api_key)
-    messages = [{"role":"user","content":(
+    candidates = []
+
+    class _Callback(BaseCallbackHandler):
+        def __init__(self):
+            self.mol_index = 0
+            self.tool_count = 0
+            self.current_tool = None
+            self.current_smiles = ""
+            self.pending_text = ""
+
+        def on_agent_action(self, action, **kwargs):
+            # Capture reasoning text and tool details before execution
+            self.current_tool = action.tool
+            if isinstance(action.tool_input, dict):
+                self.current_smiles = action.tool_input.get("smiles", "")
+            if action.log:
+                self.pending_text = action.log.strip()
+
+        def on_tool_start(self, serialized, input_str, **kwargs):
+            self.tool_count += 1
+            self.current_tool = serialized.get("name", self.current_tool)
+            # Parse smiles from structured input if on_agent_action didn't fire
+            if not self.current_smiles:
+                try:
+                    inp = json.loads(input_str) if isinstance(input_str, str) else {}
+                    self.current_smiles = inp.get("smiles", "") if isinstance(inp, dict) else ""
+                except Exception:
+                    pass
+            label = "Starting molecule" if self.mol_index == 0 else f"Attempt {self.mol_index}"
+            status_placeholder.info(f"🔬 Evaluating {label}…  (step {self.tool_count})")
+
+        def on_tool_end(self, output, **kwargs):
+            if self.current_tool != "analyze_molecule":
+                self.current_smiles = ""
+                return
+            try:
+                data = json.loads(output)
+                if "error" not in data and "cns_mpo_score" in data:
+                    data["mol_index"]    = self.mol_index
+                    data["input_smiles"] = self.current_smiles
+                    data["reasoning"]    = self.pending_text
+                    candidates.append(data)
+                    self.mol_index   += 1
+                    self.current_smiles = ""
+                    self.pending_text   = ""
+                    st.session_state.candidates = list(candidates)
+                    if results_placeholder and journey_placeholder:
+                        render_tab_views(results_placeholder, journey_placeholder, candidates)
+            except Exception:
+                pass
+
+    cb = _Callback()
+
+    llm = ChatOpenAI(
+        model=model,
+        openai_api_key=api_key,
+        openai_api_base="https://openrouter.ai/api/v1",
+        temperature=0.3,
+        max_tokens=4096,
+    )
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", "{input}"),
+        MessagesPlaceholder("agent_scratchpad"),
+    ])
+    agent    = create_tool_calling_agent(llm, TOOLS, prompt)
+    executor = AgentExecutor(
+        agent=agent,
+        tools=TOOLS,
+        max_iterations=max_tool_calls,
+        callbacks=[cb],
+    )
+
+    executor.invoke({"input": (
         f"Starting molecule SMILES: {smiles}\n\nOptimization goal:\n{goal}\n\n"
         "Analyze the starting molecule first, then propose and evaluate structural "
         "modifications round by round. Explain your chemical reasoning clearly for "
         "each change. End with the best candidate and a plain-language summary."
-    )}]
-    candidates   = []
-    tool_count   = 0
-    pending_text = ""   # agent text accumulated before next analyze_molecule call
-    mol_index    = 0    # counts analyze_molecule calls (0 = starting molecule)
+    )})
 
-    while True:
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=4096,
-            system=SYSTEM_PROMPT,
-            tools=TOOLS,
-            messages=messages,
-        )
-        messages.append({"role":"assistant","content":response.content})
-
-        # Accumulate agent reasoning text
-        for block in response.content:
-            if hasattr(block, "text") and block.text.strip():
-                pending_text += block.text.strip() + "\n\n"
-
-        if response.stop_reason == "end_turn":
-            status_placeholder.success("✅ Optimization complete!")
-            break
-
-        if response.stop_reason == "tool_use":
-            tool_results = []
-            for block in response.content:
-                if block.type != "tool_use":
-                    continue
-
-                tool_count += 1
-                label = "Starting molecule" if mol_index == 0 else f"Attempt {mol_index}"
-                status_placeholder.info(f"🔬 Evaluating {label}…  (step {tool_count})")
-
-                result = tool_executor(block.name, block.input)
-
-                # Capture each analyzed molecule with its reasoning
-                if block.name == "analyze_molecule" and "error" not in result:
-                    candidates.append({
-                        "mol_index":   mol_index,
-                        "input_smiles": block.input["smiles"],
-                        "reasoning":   pending_text.strip(),
-                        **result,
-                    })
-                    mol_index    += 1
-                    pending_text  = ""
-                    st.session_state.candidates = list(candidates)
-                    if results_placeholder is not None and journey_placeholder is not None:
-                        render_tab_views(results_placeholder, journey_placeholder, candidates)
-
-                tool_results.append({
-                    "type":"tool_result",
-                    "tool_use_id":block.id,
-                    "content":json.dumps(result, default=str),
-                })
-            messages.append({"role":"user","content":tool_results})
-
-        if tool_count >= max_tool_calls:
-            status_placeholder.warning(f"Reached maximum steps ({max_tool_calls}).")
-            break
-
+    status_placeholder.success("✅ Optimization complete!")
     st.session_state.candidates = candidates
     st.session_state.completed  = True
 
@@ -1645,14 +1671,15 @@ with st.sidebar:
     )
     st.divider()
     entered_api_key = st.text_input(
-        "Claude API Key",
+        "OpenRouter API Key",
         type="password",
         value="",
-        placeholder="sk-ant-...",
-        help="Used only for live optimisation. If you do not have a key, you can still load or upload saved runs below.",
+        placeholder="sk-or-...",
+        help="Get a key at openrouter.ai — works with Claude, GPT-4o, Gemini, Llama and more.",
     )
-    server_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    server_api_key = os.environ.get("OPENROUTER_API_KEY", "")
     api_key = entered_api_key.strip() or server_api_key
+    selected_model = st.selectbox("Model", list(MODELS.keys()))
     st.caption("If you do not want to use a key, you can still explore saved runs below.")
 
     st.divider()
@@ -1896,7 +1923,7 @@ render_tab_views(results_placeholder, journey_placeholder, candidates)
 # ─── Run ───────────────────────────────────────────────────────────────────────
 if run_btn:
     if not api_key:
-        st.error("Enter a Claude API key to run live optimisation, or use a saved run instead.")
+        st.error("Enter an OpenRouter API key to run live optimisation, or use a saved run instead.")
     elif not smiles_input.strip():
         st.error("Please enter a starting molecule SMILES.")
     elif not goal_input.strip():
@@ -1916,6 +1943,7 @@ if run_btn:
                     goal_input.strip(),
                     max_calls,
                     api_key,
+                    MODELS[selected_model],
                     status_box,
                     results_placeholder=results_placeholder,
                     journey_placeholder=journey_placeholder,
