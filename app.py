@@ -1851,10 +1851,10 @@ with readiness_col:
     readiness_html = "".join(
         [
             readiness_item(
-                "Claude key",
+                "OpenRouter key",
                 "A live optimisation key is available."
                 if api_key
-                else "Enter a Claude key or use a saved run.",
+                else "Enter an OpenRouter key or use a saved run.",
                 bool(api_key),
             ),
             readiness_item(
