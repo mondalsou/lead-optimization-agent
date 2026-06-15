@@ -1296,11 +1296,13 @@ candidate toward the stated optimization goal, while keeping it drug-like and sa
 """.strip()
 
 MODELS = {
-    "Claude 3.5 Sonnet": "anthropic/claude-3.5-sonnet",
-    "Claude 3 Haiku (fast)": "anthropic/claude-3-haiku",
-    "GPT-4o": "openai/gpt-4o",
-    "Gemini 2.0 Flash": "google/gemini-2.0-flash-001",
-    "Llama 3.3 70B": "meta-llama/llama-3.3-70b-instruct",
+    "Claude Sonnet 4.6 (default)": "anthropic/claude-sonnet-4.6",
+    "Claude Haiku 4.5 (fast)":     "anthropic/claude-haiku-4.5",
+    "Claude Opus 4.6":             "anthropic/claude-opus-4.6",
+    "DeepSeek V4 Flash":           "deepseek/deepseek-v4-flash",
+    "GPT-4o":                      "openai/gpt-4o",
+    "Gemini 2.0 Flash":            "google/gemini-2.0-flash-001",
+    "Llama 3.3 70B":               "meta-llama/llama-3.3-70b-instruct",
 }
 
 
