@@ -25,10 +25,7 @@ from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain_core.callbacks import BaseCallbackHandler
 
 sys.path.insert(0, os.path.dirname(__file__))
-from agent_utils import (
-    call_admet_api, extract_key_scores, is_valid_smiles,
-    compare_candidates as _compare_candidates,
-)
+from agent_utils import tool_executor, is_valid_smiles
 
 # ─── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -1310,21 +1307,22 @@ MODELS = {
 @tool
 def validate_smiles(smiles: str) -> str:
     """Validate a SMILES string and return its canonical form. Always call this before analyze_molecule."""
-    return json.dumps(is_valid_smiles(smiles))
+    return json.dumps(tool_executor("validate_smiles", {"smiles": smiles}))
 
 
 @tool
 def analyze_molecule(smiles: str) -> str:
     """Compute a full ADMET profile for a molecule (local RDKit, no API). Returns MW, cLogP, TPSA, QED, BBB penetration, CNS MPO, solubility, Lipinski rules, PAINS alerts, and decision guidance."""
-    resp = call_admet_api(smiles)
-    result = extract_key_scores(resp) if "error" not in resp else resp
-    return json.dumps(result)
+    return json.dumps(tool_executor("analyze_molecule", {"smiles": smiles}))
 
 
 @tool
 def compare_candidates(smiles_list: list, labels: list = None) -> str:
     """Compare multiple drug candidates side by side. Returns ADMET scores for all molecules in one call."""
-    return json.dumps(_compare_candidates(smiles_list, labels))
+    inp = {"smiles_list": smiles_list}
+    if labels:
+        inp["labels"] = labels
+    return json.dumps(tool_executor("compare_candidates", inp))
 
 
 TOOLS = [validate_smiles, analyze_molecule, compare_candidates]
