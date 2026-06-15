@@ -186,29 +186,6 @@ def _pains_alerts(mol) -> list:
         return []
 
 
-def _sa_score(mol, mw: float) -> tuple:
-    """
-    Synthetic accessibility heuristic.
-    Rough inverse of complexity: penalise rings, stereocenters, MW.
-    Returns (score 1-10, class string). Lower = easier to synthesise.
-    """
-    ring_count = rdMolDescriptors.CalcNumRings(mol)
-    spiro = rdMolDescriptors.CalcNumSpiroAtoms(mol)
-    stereo = len(Chem.FindMolChiralCenters(mol, includeUnassigned=True))
-    heavy = mol.GetNumHeavyAtoms()
-
-    complexity = (0.02 * mw + 0.5 * ring_count + 1.0 * spiro + 0.7 * stereo)
-    score = min(10.0, max(1.0, complexity))
-    score = round(score, 1)
-
-    if score <= 3:
-        sa_class = "Easy"
-    elif score <= 6:
-        sa_class = "Moderate"
-    else:
-        sa_class = "Difficult"
-
-    return score, sa_class
 
 
 def _fail_fast_score(lipinski_summary: str, num_alerts: int,
@@ -281,11 +258,7 @@ def _optimization_suggestions(clogp: float, mw: float, tpsa: float,
 
 
 def analyze_local(smiles: str) -> dict:
-    """
-    Compute a full ADMET profile for a SMILES string using local RDKit.
-    Returns a dict in the same shape as the Drug Discovery Triage API response,
-    so extract_key_scores() works without any changes.
-    """
+    """Compute full ADMET profile for a SMILES string using local RDKit."""
     if not RDKIT_AVAILABLE:
         return {"error": "RDKit not installed. Run: conda install -c conda-forge rdkit"}
 
@@ -301,78 +274,56 @@ def analyze_local(smiles: str) -> dict:
     hbd       = rdMolDescriptors.CalcNumHBD(mol)
     hba       = rdMolDescriptors.CalcNumHBA(mol)
     rb        = rdMolDescriptors.CalcNumRotatableBonds(mol)
-    fsp3      = round(rdMolDescriptors.CalcFractionCSP3(mol), 3)
-    ring_ct   = rdMolDescriptors.CalcNumRings(mol)
-    ar_ring   = rdMolDescriptors.CalcNumAromaticRings(mol)
 
     # ── QED ───────────────────────────────────────────────────────────────────
     qed_val   = round(QED.qed(mol), 3)
-    if qed_val >= 0.67:
-        qed_class = "Drug-like"
-    elif qed_val >= 0.34:
-        qed_class = "Moderate"
-    else:
-        qed_class = "Poor"
+    qed_class = "Drug-like" if qed_val >= 0.67 else ("Moderate" if qed_val >= 0.34 else "Poor")
 
     # ── Lipinski ──────────────────────────────────────────────────────────────
-    lip_rules, lip_summary = _lipinski_check(mw, clogp, hbd, hba)
+    _, lip_summary = _lipinski_check(mw, clogp, hbd, hba)
 
     # ── PAINS alerts ──────────────────────────────────────────────────────────
-    alerts = _pains_alerts(mol)
+    alert_names = [a.get("name", "") for a in _pains_alerts(mol)]
 
     # ── ADMET ─────────────────────────────────────────────────────────────────
-    log_s        = round(_esol_log_s(mol, mw, clogp, rb), 2)
-    sol_class    = _solubility_class(log_s)
-    gi           = _gi_absorption(tpsa, rb, mw, clogp, hbd)
-    bbb          = _bbb_probability(clogp, mw, tpsa, hbd)
-    cns          = _cns_mpo(clogp, mw, tpsa, hbd)
-    cyp          = _cyp_flags(mol)
+    log_s  = round(_esol_log_s(mol, mw, clogp, rb), 2)
+    gi     = _gi_absorption(tpsa, rb, mw, clogp, hbd)
+    bbb    = _bbb_probability(clogp, mw, tpsa, hbd)
+    cns    = _cns_mpo(clogp, mw, tpsa, hbd)
+    cyp    = _cyp_flags(mol)
 
-    # ── Synthetic accessibility & scoring ─────────────────────────────────────
-    sa_score, sa_class = _sa_score(mol, mw)
-    fail_fast    = _fail_fast_score(lip_summary, len(alerts), mw, tpsa, clogp)
-    decision, rationale = _decision(fail_fast, bbb["probability"], qed_val,
-                                    cns["score"], len(alerts))
-    suggestions  = _optimization_suggestions(clogp, mw, tpsa, hbd,
-                                             bbb["probability"], cns["score"],
-                                             qed_val, rb)
+    # ── Scoring ───────────────────────────────────────────────────────────────
+    fail_fast          = _fail_fast_score(lip_summary, len(alert_names), mw, tpsa, clogp)
+    decision, rationale = _decision(fail_fast, bbb["probability"], qed_val, cns["score"], len(alert_names))
+    suggestions        = [s["text"] for s in _optimization_suggestions(
+                              clogp, mw, tpsa, hbd, bbb["probability"], cns["score"], qed_val, rb)]
 
     return {
-        # ── Identity ──────────────────────────────────────────────────────────
-        "canonical_smiles": canonical,
-        # ── Physicochemical ───────────────────────────────────────────────────
-        "molecular_weight": mw,
-        "clogp":            clogp,
-        "tpsa":             tpsa,
-        "hbd":              hbd,
-        "hba":              hba,
-        "rotatable_bonds":  rb,
-        "fraction_sp3":     fsp3,
-        "ring_count":       ring_ct,
-        "aromatic_ring_count": ar_ring,
-        # ── Drug-likeness ─────────────────────────────────────────────────────
-        "qed": {"qed_score": qed_val, "qed_class": qed_class},
-        "lipinski_rules":   lip_rules,
-        "lipinski_summary": lip_summary,
-        "alerts":           alerts,
-        "synthetic_accessibility_score": sa_score,
-        "synthetic_accessibility_class": sa_class,
-        "fail_fast_score":  fail_fast,
-        "decision":         decision,
+        "canonical_smiles":   canonical,
+        "molecular_weight":   round(mw, 1),
+        "clogp":              clogp,
+        "tpsa":               tpsa,
+        "hbd":                hbd,
+        "hba":                hba,
+        "rotatable_bonds":    rb,
+        "qed_score":          qed_val,
+        "qed_class":          qed_class,
+        "lipinski_summary":   lip_summary,
+        "fail_fast_score":    round(fail_fast, 1),
+        "decision":           decision,
         "decision_rationale": rationale,
-        "optimization_suggestions": suggestions,
-        # ── ADMET ─────────────────────────────────────────────────────────────
-        "admet": {
-            "solubility": {
-                "log_s":            log_s,
-                "solubility_class": sol_class,
-            },
-            "gi_absorption": gi,
-            "bbb_penetration": bbb,
-            "cns_mpo": cns,
-            "cyp_metabolism": cyp,
-            "toxicity": {"endpoints": {}},
-        },
+        "solubility_class":   _solubility_class(log_s),
+        "log_s":              log_s,
+        "gi_absorption":      gi["absorption"],
+        "bbb_penetrates":     bbb["penetrates"],
+        "bbb_probability":    round(bbb["probability"], 3),
+        "cns_mpo_score":      round(cns["score"], 2),
+        "cns_class":          cns["cns_class"],
+        "alerts":             alert_names,
+        "num_alerts":         len(alert_names),
+        "cyp3a4_substrate":   cyp["cyp3a4_substrate"],
+        "cyp_inhibitor_risk": cyp["cyp_inhibitor_risk"],
+        "api_suggestions":    suggestions,
     }
 
 
@@ -414,75 +365,16 @@ def is_valid_smiles(smiles: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Score Extraction  (flatten full API response → concise dict)
-# ─────────────────────────────────────────────────────────────────────────────
-def extract_key_scores(response: dict) -> dict:
-    """
-    Flatten the full API response into the metrics the agent needs to reason about.
-    Includes physicochemical properties, ADMET, toxicity, and the API's own decision.
-    """
-    if "error" in response:
-        return response
-
-    admet = response.get("admet", {})
-    cyp   = admet.get("cyp_metabolism", {})
-    alerts = response.get("alerts", [])
-    alert_names = [a.get("name", "") for a in alerts] if isinstance(alerts, list) else []
-    suggestions = [s.get("text", "") for s in response.get("optimization_suggestions", [])]
-
-    qed_block = response.get("qed", {})
-    qed_score = (qed_block.get("qed_score") or 0) if isinstance(qed_block, dict) else 0
-
-    return {
-        # ── Identity ──────────────────────────────────────────────────────────
-        "canonical_smiles":   response.get("canonical_smiles", ""),
-        # ── Physicochemical ───────────────────────────────────────────────────
-        "molecular_weight":   round(response.get("molecular_weight", 0), 1),
-        "clogp":              round(response.get("clogp", 0), 2),
-        "tpsa":               round(response.get("tpsa", 0), 1),
-        "hbd":                response.get("hbd", 0),
-        "hba":                response.get("hba", 0),
-        "rotatable_bonds":    response.get("rotatable_bonds", 0),
-        # ── Drug-likeness ─────────────────────────────────────────────────────
-        "qed_score":          round(float(qed_score), 3),
-        "qed_class":          qed_block.get("qed_class", "") if isinstance(qed_block, dict) else "",
-        "lipinski_summary":   response.get("lipinski_summary", "Unknown"),
-        "fail_fast_score":    round(response.get("fail_fast_score", 0), 1),
-        "decision":           response.get("decision", "Unknown"),
-        "decision_rationale": response.get("decision_rationale", ""),
-        # ── ADMET ─────────────────────────────────────────────────────────────
-        "solubility_class":   admet.get("solubility", {}).get("solubility_class", "Unknown"),
-        "log_s":              admet.get("solubility", {}).get("log_s", None),
-        "gi_absorption":      admet.get("gi_absorption", {}).get("absorption", "Unknown"),
-        "bbb_penetrates":     admet.get("bbb_penetration", {}).get("penetrates", False),
-        "bbb_probability":    round(admet.get("bbb_penetration", {}).get("probability", 0), 3),
-        "cns_mpo_score":      round(admet.get("cns_mpo", {}).get("score", 0), 2),
-        "cns_class":          admet.get("cns_mpo", {}).get("cns_class", "Unknown"),
-        # ── Toxicity ──────────────────────────────────────────────────────────
-        "alerts":             alert_names,
-        "num_alerts":         len(alert_names),
-        "cyp3a4_substrate":   cyp.get("cyp3a4_substrate", False),
-        "cyp_inhibitor_risk": cyp.get("cyp_inhibitor_risk", False),
-        # ── API's own suggestions (bonus context for the agent) ───────────────
-        "api_suggestions":    suggestions,
-    }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Tool 3: Compare Candidates
 # ─────────────────────────────────────────────────────────────────────────────
 def compare_candidates(smiles_list: list, labels: list = None) -> dict:
-    """
-    Analyze multiple SMILES and return side-by-side key scores.
-    Used by the agent to rank candidates across optimization rounds.
-    """
+    """Analyze multiple SMILES and return side-by-side scores."""
     if not labels:
         labels = [f"Candidate {i}" for i in range(len(smiles_list))]
 
     results = []
     for smiles, label in zip(smiles_list, labels):
-        resp = call_admet_api(smiles)
-        entry = extract_key_scores(resp) if "error" not in resp else resp
+        entry = call_admet_api(smiles)
         entry["label"] = label
         results.append(entry)
 
@@ -493,10 +385,9 @@ def compare_candidates(smiles_list: list, labels: list = None) -> dict:
 # Tool Dispatcher  (called by the agent loop)
 # ─────────────────────────────────────────────────────────────────────────────
 def tool_executor(tool_name: str, tool_input: dict) -> dict:
-    """Route a Claude tool_use block to the correct function."""
+    """Route a tool_use block to the correct function."""
     if tool_name == "analyze_molecule":
-        resp = call_admet_api(tool_input["smiles"])
-        return extract_key_scores(resp) if "error" not in resp else resp
+        return call_admet_api(tool_input["smiles"])
 
     elif tool_name == "validate_smiles":
         return is_valid_smiles(tool_input["smiles"])
