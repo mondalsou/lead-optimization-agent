@@ -7,7 +7,7 @@ sdk: streamlit
 sdk_version: 1.35.0
 app_file: app.py
 pinned: false
-short_description: AI agent for iterative drug lead optimization with RDKit
+short_description: LangChain agent for iterative drug lead optimization with RDKit
 ---
 
 # Lead Optimization Agent
@@ -15,32 +15,27 @@ short_description: AI agent for iterative drug lead optimization with RDKit
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-HuggingFace%20Spaces-FFD21E?style=flat&logo=huggingface&logoColor=black)](https://huggingface.co/spaces/mondalsou/lead_optimization_agent)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat&logo=python&logoColor=white)](https://python.org)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.35+-FF4B4B?style=flat&logo=streamlit&logoColor=white)](https://streamlit.io)
-[![Anthropic](https://img.shields.io/badge/Anthropic-Claude-191919?style=flat)](https://anthropic.com)
-[![RDKit](https://img.shields.io/badge/RDKit-local%20analysis-0f766e?style=flat)](https://www.rdkit.org/)
+[![LangChain](https://img.shields.io/badge/LangChain-0.2+-1C3C3C?style=flat&logo=langchain&logoColor=white)](https://langchain.com)
+[![OpenRouter](https://img.shields.io/badge/OpenRouter-multi--model-6366f1?style=flat)](https://openrouter.ai)
+[![RDKit](https://img.shields.io/badge/RDKit-local%20scoring-0f766e?style=flat)](https://www.rdkit.org/)
 
 **[Try the live demo on HuggingFace Spaces](https://huggingface.co/spaces/mondalsou/lead_optimization_agent)**
 
 ---
 
-## Problem
+## What it does
 
-Drug lead optimization is one of the most expensive and slow phases of drug discovery. A medicinal chemist starts with a promising molecule and must iteratively explore chemical space — proposing analogues, synthesizing them, measuring ADMET properties (absorption, distribution, metabolism, excretion, toxicity), and deciding whether to continue or pivot.
+LangChain agent that iteratively optimizes drug molecules toward a target ADMET profile. Give it a starting SMILES and a plain-English goal — it proposes one structural change per round, scores each candidate locally via RDKit, and surfaces results in a Streamlit UI.
 
-This process is:
-- **Manual and slow** — each analogue requires expert chemical intuition to design
-- **Disconnected** — scoring tools, structure editors, and decision notes live in separate places
-- **Opaque** — it's hard to audit why a particular direction was pursued across dozens of iterations
-- **Expensive to iterate** — without fast local scoring, every feedback loop requires wet-lab or commercial prediction services
-
-There is no lightweight tool that closes the loop between AI-assisted structural reasoning, fast local property scoring, and scientist oversight — all in one interface.
+Swap between Claude, GPT-4o, DeepSeek V4 Flash, Gemini, or Llama by changing one dropdown. No model-specific code.
 
 ---
 
-## Solution
+## Problem
 
-**Lead Optimization Agent** is an AI-native iterative sandbox for medicinal chemistry exploration. Given a starting molecule and a plain-English optimization goal, the agent proposes one structural change at a time, scores each candidate locally using RDKit, and surfaces results for the scientist to review, accept, or redirect.
+Drug lead optimization is slow and expensive. A medicinal chemist starts with a promising molecule and must iteratively explore chemical space — proposing analogues, scoring ADMET properties, and deciding whether to continue or pivot. Each feedback loop requires expert chemical intuition and either wet-lab measurements or commercial prediction services.
 
-The scientist stays in control. The agent accelerates the ideation and scoring cycle.
+This project closes that loop: AI reasoning + fast local scoring + scientist oversight, in one interface.
 
 ---
 
@@ -49,93 +44,108 @@ The scientist stays in control. The agent accelerates the ideation and scoring c
 ### Agentic loop
 
 ```
-Scientist defines goal (brief)
+Scientist defines goal (SMILES + brief)
          │
          ▼
   Agent proposes structural edit  ←──────────────────┐
          │                                            │
          ▼                                            │
   RDKit scores candidate locally                      │
-  (QED, BBB, CNS MPO, solubility, SA score)          │
+  (QED, BBB, CNS MPO, solubility, alerts)            │
          │                                            │
          ▼                                            │
   Attempt logged with rationale + property delta      │
          │                                            │
          ▼                                            │
-  Scientist reviews: accept / redirect / stop ────────┘
+  Scientist reviews → accept / redirect / stop ───────┘
          │
          ▼
   Best candidate surfaced with full audit trail
 ```
 
-### Two distinct components
+### Stack
 
-**Agent (Claude via Anthropic API)** — handles the chemistry reasoning layer:
-- reads the current molecule and property scores
-- proposes the next structural edit and explains the logic
-- does not perform property calculations
+| Layer | What |
+|---|---|
+| **LLM routing** | LangChain + OpenRouter — any tool-calling model |
+| **Agent loop** | `create_tool_calling_agent` + `AgentExecutor` |
+| **Chemistry scoring** | RDKit (local, instant, free) via `agent_utils.py` |
+| **UI** | Streamlit with live incremental updates |
 
-**Local scoring (RDKit in `agent_utils.py`)** — deterministic, fast, no API call:
-- QED (drug-likeness)
-- Lipinski rule-of-five summary
-- BBB permeability heuristic
-- CNS MPO score
-- Aqueous solubility estimate
-- GI absorption heuristic
-- Structural alerts
-- Synthetic accessibility (SA) heuristic
+### Tools the agent has
 
-This separation means chemistry scoring is reproducible and free; the LLM is used only for reasoning about what change to try next.
+| Tool | What it does |
+|---|---|
+| `validate_smiles` | RDKit SMILES validation before analysis |
+| `analyze_molecule` | Full ADMET profile — QED, BBB, CNS MPO, solubility, Lipinski, alerts |
+| `compare_candidates` | Side-by-side scoring of multiple molecules |
 
-### UI
-
-The Streamlit app presents each iteration as a candidate card with:
-- 2D structure with the changed region highlighted
-- plain-English change summary
-- per-property deltas vs. the starting molecule
-- `Candidate Journey` tab for attempt-by-attempt review
-- `Performance Overview` tab with trajectory plots and a start-vs-best radar chart
+Scoring is deterministic and local — no API call for chemistry. The LLM is used only for structural reasoning.
 
 ---
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/mondalsou/lead_optimization_agent.git
-cd lead_optimization_agent
+git clone https://github.com/mondalsou/lead-optimization-agent.git
+cd lead-optimization-agent
 pip install -r requirements.txt
-# if RDKit fails via pip: conda install -c conda-forge rdkit
-export ANTHROPIC_API_KEY=sk-ant-...
+# RDKit via pip may fail — use conda if so:
+# conda install -c conda-forge rdkit
+
+cp .env.example .env
+# add your OpenRouter key to .env:
+# OPENROUTER_API_KEY=sk-or-...
+
 streamlit run app.py
 ```
 
-Open `http://localhost:8501`, pick a preset or paste your own SMILES, write the optimization brief, and click **Run Optimisation**.
+Open `http://localhost:8501`, pick a preset or paste your own SMILES, write the optimization brief, pick a model, and click **Run Optimisation**.
+
+---
+
+## Supported Models (via OpenRouter)
+
+| Model | Slug |
+|---|---|
+| Claude Sonnet 4.6 | `anthropic/claude-sonnet-4.6` |
+| Claude Haiku 4.5 | `anthropic/claude-haiku-4.5` |
+| Claude Opus 4.6 | `anthropic/claude-opus-4.6` |
+| DeepSeek V4 Flash | `deepseek/deepseek-v4-flash` |
+| GPT-4o | `openai/gpt-4o` |
+| Gemini 2.0 Flash | `google/gemini-2.0-flash-001` |
+| Llama 3.3 70B | `meta-llama/llama-3.3-70b-instruct` |
 
 ---
 
 ## Project Structure
 
 ```
-lead_optimization_agent/
-├── app.py              # Streamlit UI + agent orchestration
-├── agent_utils.py      # RDKit scoring, SMILES validation, helpers
+lead-optimization-agent/
+├── app.py                  # Streamlit UI + LangChain agent
+├── agent_utils.py          # RDKit scoring, SMILES validation
 ├── requirements.txt
-├── candidates.json
-├── saved_runs/         # Local run persistence (JSON)
+├── .env.example            # Copy to .env and add your key
+├── saved_runs/             # Local run persistence (JSON)
+├── hermes_tools/           # Hermes agent integration
+│   ├── lead_opt.py
+│   └── chemistry_skill.md
+├── hermes_setup.sh         # One-shot Hermes setup script
 └── notebooks/
-    ├── 01_admet_tool.ipynb
-    ├── 02_agent_loop.ipynb
-    └── 03_visualization.ipynb
+    ├── 01_admet_tool.ipynb         # Explore the ADMET scorer
+    ├── 02_agent_loop.ipynb         # Anthropic SDK agent loop
+    ├── 03_visualization.ipynb      # Optimization trajectory plots
+    └── 04_langchain_openrouter.ipynb  # LangChain + OpenRouter version
 ```
 
 ---
 
 ## Preset Scenarios
 
-- `Atenolol → Brain Penetration`
-- `Aspirin → CNS Drug Profile`
-- `Ibuprofen → Aqueous Solubility`
-- `Custom molecule`
+- `Atenolol → Brain Penetration` — reduce polarity, improve BBB / CNS MPO
+- `Aspirin → CNS Drug Profile` — replace carboxylic acid liability
+- `Ibuprofen → Aqueous Solubility` — lower cLogP, add polar groups
+- `Custom molecule` — paste any SMILES
 
 ---
 
@@ -143,7 +153,7 @@ lead_optimization_agent/
 
 - Heuristic prototyping tool, not a validated drug-discovery platform
 - Property outputs are local approximations, not experimental measurements
-- Agent suggestions should be reviewed by a domain expert before serious decisions
+- Agent suggestions should be reviewed by a domain expert
 
 ---
 
